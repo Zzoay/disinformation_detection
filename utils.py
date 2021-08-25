@@ -1,11 +1,12 @@
 
+import random
 from typing import Dict, Any, List
 from configparser import ConfigParser, ExtendedInterpolation
 
 from numpy import random as np_random
 import torch
 from torch.utils.data import Dataset, random_split
-import random
+from sklearn.metrics import confusion_matrix
 
 
 def set_seed(seed):
@@ -100,3 +101,30 @@ def train_val_split(train_dataset: Dataset, val_ratio: float, shuffle: bool = Tr
         return random_split(train_dataset, (train_size, val_size), None)
     else:
         return [train_dataset[:train_size], train_dataset[train_size:]]
+
+
+def compute_measures(logit, y_gt):
+    predicts = torch.max(logit, 1)[1]
+
+    tmp = confusion_matrix(y_true=y_gt.cpu().numpy(), y_pred=predicts.cpu().numpy(), labels=[0, 1]).ravel()
+    tn, fp, fn, tp = [float(x) for x in tmp]
+
+    if tp + fp == 0:
+        precision = 0
+    else:
+        precision = tp / (tp + fp)
+    
+    if tp + fn == 0:
+        recall = 0
+    else:
+        recall = tp / (tp + fn)
+    
+    accuracy = (tp + tn) / (tp + fp + tn + fn)
+
+    if precision + recall  == 0:
+        f1 = 0
+    else:
+        f1 = 2*precision*recall/(precision+recall)
+
+    measures = {"precision":precision, "accuracy":accuracy, "recall":recall, "f1":f1}
+    return measures
