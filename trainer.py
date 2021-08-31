@@ -31,14 +31,18 @@ class Trainer():
         
         self.optim = Adam(model.parameters(), 
                           lr=self.config['lr'],
-                        #   weight_decay=self.config['weight_decay']
+                          weight_decay=self.config['weight_decay']
                           )
         warmup_step = int(0.05 * self.config["epochs"] * (trainset_size / 8))  # TODO: batch_size
         self.optim_schedule = ScheduledOptim(optimizer=self.optim, 
                                              d_model=768,  # a num of model hidden size average
                                              n_warmup_steps=warmup_step)    
 
-        best_res = [0, {"precision":0, "accuracy":0, "recall":0, "f1":0}]
+        best_res = [0, {"accuracy": 0, 
+                        "bi_precision": 0, "bi_recall": 0, "bi_f1": 0, 
+                        "micro_precision": 0, "micro_recall": 0, "micro_f1": 0, 
+                        "macro_precision": 0, "macro_recall": 0, "macro_f1": 0, 
+                        "weighted_precision": 0, "weighted_recall": 0, "weighted_f1": 0}]
         best_model = None
         early_stop_cnt = 0
         step = 0
@@ -71,14 +75,22 @@ class Trainer():
                     print_labels = torch.cat(labels, dim=0).cuda() # type: ignore
                     print_loss, print_metrics = self.loss_fn(print_logits, print_labels), self.metrics_fn(print_logits, print_labels)  # type: ignore
                     print(f"--Epoch {epoch}, Step {step}, Loss {print_loss}")
-                    print("Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
-                            .format(print_metrics['precision'], print_metrics['recall'], print_metrics['accuracy'], print_metrics['f1']))
+                    print(" Accuracy: {:4f}  \n" \
+                          " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n"
+                        .format(print_metrics['accuracy'],                               # type: ignore
+                                print_metrics['bi_precision'], print_metrics['bi_recall'], print_metrics['bi_f1'],  # type: ignore
+                                print_metrics['micro_precision'], print_metrics['micro_recall'], print_metrics['micro_f1'],  # type: ignore
+                                print_metrics['macro_precision'], print_metrics['macro_recall'], print_metrics['macro_f1'],  # type: ignore
+                                print_metrics['weighted_precision'], print_metrics['weighted_recall'], print_metrics['weighted_f1']))  # type: ignore
                     logits, labels = [], []
                 
                 if epoch >= 0 and step % self.config['eval_every'] == 0:
                     avg_loss, avg_metrics = self.evaluate(model, val_iter)
                     res = [avg_loss, avg_metrics]
-                    if avg_metrics['f1'] > best_res[1]['f1']:   # type: ignore
+                    if avg_metrics['loss'] > best_res[1]['loss']:   # type: ignore
                         best_res = res
                         best_model = model.train().cpu().state_dict()
                         model.cuda()
@@ -86,12 +98,22 @@ class Trainer():
                     else:
                         early_stop_cnt += 1
                     print("--Best Evaluation: ")
-                    print("-Loss: {:.4f}  Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
-                        .format(best_res[0], best_res[1]['precision'], best_res[1]['recall'], best_res[1]['accuracy'], best_res[1]['f1']))  # type: ignore
+                    # print("-Loss: {:.4f}  Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
+                    #     .format(best_res[0], best_res[1]['precision'], best_res[1]['recall'], best_res[1]['accuracy'], best_res[1]['f1']))  # type: ignore
                     # back to train mode
+                    print("-Loss: {:.4f}  Accuracy: {:4f}  \n" \
+                          " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                          " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" 
+                        .format(best_res[0], best_res[1]['accuracy'],                               # type: ignore
+                                best_res[1]['bi_precision'], best_res[1]['bi_recall'], best_res[1]['bi_f1'],  # type: ignore
+                                best_res[1]['micro_precision'], best_res[1]['micro_recall'], best_res[1]['micro_f1'],  # type: ignore
+                                best_res[1]['macro_precision'], best_res[1]['macro_recall'], best_res[1]['macro_f1'],  # type: ignore
+                                best_res[1]['weighted_precision'], best_res[1]['weighted_recall'], best_res[1]['weighted_f1']))  # type: ignore
                     model.train()
                 
-                # if epoch > 5 and early_stop_cnt >= self.config['early_stop']:
+                # if epoch > 10 and early_stop_cnt >= self.config['early_stop']:
                 #     print("--early stopping, training finished.")
                 #     return best_res, best_model
 
@@ -115,8 +137,16 @@ class Trainer():
         labels = torch.cat(labels, dim=0).cuda()  # type: ignore
         loss, metrics = self.loss_fn(logits, labels), self.metrics_fn(logits, labels)  # type: ignore
         print("--Evaluation:")
-        print("-Loss: {:.4f}  Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
-                .format(loss, metrics['precision'], metrics['recall'], metrics['accuracy'], metrics['f1']))
+        print("-Loss: {:.4f}  Accuracy: {:4f}  \n" \
+              " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n"
+            .format(loss, metrics['accuracy'],                               # type: ignore
+                    metrics['bi_precision'], metrics['bi_recall'], metrics['bi_f1'],  # type: ignore
+                    metrics['micro_precision'], metrics['micro_recall'], metrics['micro_f1'],  # type: ignore
+                    metrics['macro_precision'], metrics['macro_recall'], metrics['macro_f1'],  # type: ignore
+                    metrics['weighted_precision'], metrics['weighted_recall'], metrics['weighted_f1']))  # type: ignore
         if save_file != "":
             results = [save_title, avg_loss, avg_metrics.values()]  # type: ignore
             results = [str(x) for x in results]

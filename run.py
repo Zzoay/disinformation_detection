@@ -3,7 +3,7 @@ import random
 
 import torch
 from torch.optim import Adam
-from torch.utils.data import DataLoader, WeightedRandomSampler, Subset
+from torch.utils.data import DataLoader, WeightedRandomSampler, Subset, random_split
 from sklearn.model_selection import KFold
 from transformers import RobertaTokenizer
 
@@ -22,11 +22,15 @@ if __name__ == "__main__":
 
     bert_config = RobertaConfig()
 
-    set_seed(trainer_config["seed"])
+    dataset = "gossipcop"
+    mode = "fine-tune"
+    few_shot = 100
+    if isinstance(trainer_config["seed"], int):
+        seeds = [trainer_config["seed"]]
+    else:
+        seeds = trainer_config["seed"]
 
-    mode = "prompt-tune"
-
-    positive_words = ['true', 'real', 'actual', 'substantial', 'authentic', 'genuine', 'exact', 'correct', 'fact', 'truth']  
+    positive_words = ['true', 'real', 'actual', 'substantial', 'authentic', 'genuine', 'factual', 'correct', 'fact', 'truth']  
     negative_words = ['false', 'fake', 'unreal', 'misleading', 'artificial', 'bogus', 'virtual', 'incorrect', 'wrong', 'fault']
     prompt_words = positive_words + negative_words
 
@@ -42,20 +46,30 @@ if __name__ == "__main__":
     pos_tokens = tokenizer(" ".join(positive_words))['input_ids'][1:-1]  # type: ignore
     neg_tokens = tokenizer(" ".join(negative_words))['input_ids'][1:-1]  # type: ignore
 
-    datasets = ["gossipcop"]
-    for dataset in datasets:
+    for seed in seeds:
+        set_seed(seed)
+
         data_path = data_config['data_dir'] + "/" + dataset
         # data = FakeNewNetWithPrompt(data_path)
         data = FakeNewsNet(data_path)
 
         data, val_data = train_val_split(data, val_ratio=0.1, shuffle=True)
+        if few_shot is not None:
+            # val_ids = len(val_data.indices)
+            # val_data = Subset(val_data, val_ids)  # set the size of val data equal to the train data
+            _, val_data = random_split(val_data, [len(val_data.indices) - few_shot, few_shot])
         val_iter = DataLoader(dataset=val_data, 
                                 batch_size=data_config["batch_size"], 
                                 collate_fn=tokenized_collator)
 
-        kfold = KFold(n_splits=5, shuffle=True)
+        num_fold = 5
+        kfold = KFold(n_splits=num_fold, shuffle=True)
         avg_loss = 0.0
-        avg_metrics = {"precision":0.0, "accuracy":0.0, "recall":0.0, "f1":0.0}
+        avg_metrics = {"accuracy": 0, 
+                        "bi_precision": 0, "bi_recall": 0, "bi_f1": 0, 
+                        "micro_precision": 0, "micro_recall": 0, "micro_f1": 0, 
+                        "macro_precision": 0, "macro_recall": 0, "macro_f1": 0, 
+                        "weighted_precision": 0, "weighted_recall": 0, "weighted_f1": 0}
         for fold, (train_ids, test_ids) in enumerate(kfold.split(data)):
             print(f'FOLD {fold}')
             print('--------------------------------')
@@ -63,15 +77,11 @@ if __name__ == "__main__":
             if trainer_config['cuda'] and torch.cuda.is_available:
                 torch.cuda.empty_cache()
 
-            # Sample elements randomly from a given list of ids, no replacement.
-            # train_subsampler = SubsetRandomSampler(train_ids)
-            # test_subsampler = SubsetRandomSampler(test_ids)
-
             random.shuffle(train_ids)
             random.shuffle(test_ids)
 
-            # train_ids = train_ids[:int(len(train_ids) * 0.1)]
-            # train_ids = train_ids[:100]
+            if few_shot is not None:
+                train_ids = train_ids[:few_shot]
 
             train_data = Subset(data, train_ids)
             test_data = Subset(data, test_ids)
@@ -108,19 +118,34 @@ if __name__ == "__main__":
             model.load_state_dict(best_model)  # type: ignore
             test_loss, test_metrics = trainer.evaluate(model, test_iter)  # type: ignore
 
-            print("-Test Loss: {:.4f}  Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
-            .format(test_loss, test_metrics['precision'], test_metrics['recall'], test_metrics['accuracy'], test_metrics['f1']))
-
+            print("-Test Loss: {:.4f}  Accuracy: {:4f}  \n" \
+                  " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                  " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                  " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+                  " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n"
+                .format(best_res[0], best_res[1]['accuracy'],                               # type: ignore
+                        best_res[1]['bi_precision'], best_res[1]['bi_recall'], best_res[1]['bi_f1'],  # type: ignore
+                        best_res[1]['micro_precision'], best_res[1]['micro_recall'], best_res[1]['micro_f1'],  # type: ignore
+                        best_res[1]['macro_precision'], best_res[1]['macro_recall'], best_res[1]['macro_f1'],  # type: ignore
+                        best_res[1]['weighted_precision'], best_res[1]['weighted_recall'], best_res[1]['weighted_f1']))  # type: ignore
             for k in avg_metrics.keys():
                 avg_metrics[k] += test_metrics[k]
             avg_loss += test_loss
 
             model, trainer, best_model = None, None, None  # type: ignore
 
-        avg_metrics = {k:v/5 for k, v in avg_metrics.items()}  # type: ignore
-        avg_loss /= 5  # type: ignore
-        print("-K-Fold Avg Test Loss: {:.4f}  Precision: {:4f}  Recall: {:4f}  Accuracy: {:4f}  F1: {:4f}  \n"
-            .format(avg_loss, avg_metrics['precision'], avg_metrics['recall'], avg_metrics['accuracy'], avg_metrics['f1']))
-
+        avg_metrics = {k:v/num_fold for k, v in avg_metrics.items()}  # type: ignore
+        avg_loss /= num_fold  # type: ignore
+        print("-K-Fold Avg Test Loss: {:.4f}  Accuracy: {:4f}  \n" \
+              " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+              " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n"
+            .format(avg_loss, avg_metrics['accuracy'],                               # type: ignore
+                    avg_metrics['bi_precision'], avg_metrics['bi_recall'], avg_metrics['bi_f1'],  # type: ignore
+                    avg_metrics['micro_precision'], avg_metrics['micro_recall'], avg_metrics['micro_f1'],  # type: ignore
+                    avg_metrics['macro_precision'], avg_metrics['macro_recall'], avg_metrics['macro_f1'],  # type: ignore
+                    avg_metrics['weighted_precision'], avg_metrics['weighted_recall'], avg_metrics['weighted_f1']))  # type: ignore
         with open("result.csv", 'a+') as f:
-            f.write(f"roberta-{mode},{dataset},{avg_loss},{avg_metrics['precision']},{avg_metrics['recall']},{avg_metrics['accuracy']},{avg_metrics['f1']}\n")
+            save_str = ",".join([str(x) for x in avg_metrics.values()])
+            f.write(f"roberta-{mode},{dataset},{avg_loss}," + save_str +"\n")

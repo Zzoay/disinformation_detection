@@ -178,19 +178,37 @@ class TokenizedWithPromptCollator():
         self.sort_key = sort_key  # sort key
 
         self.tokenizer = tokenizer
+        self.mask_ids = tokenizer.mask_token_id
 
         self.prefix_prompt = "Here is a piece of news with <mask> information . "
-        self.postfix_prompt = " In general , this article is <mask> news ."
+        self.postfix_prompt = " This article is <mask> news ."
         self.prefix_ids = self.tokenizer(self.prefix_prompt, padding=False, return_tensors="pt")['input_ids']
         self.prefix_ids = self.prefix_ids[0][:-1]  # ignore <\s>
         self.postfix_ids = self.tokenizer(self.postfix_prompt, padding=False, return_tensors="pt")['input_ids']
         self.postfix_ids = self.postfix_ids[0][1:]  # ignore <cls>
 
+        # the last id is <mask>, we use the last but one token as unused token
+        self.unused_ids = torch.tensor([-1]) 
+        # self.unused_ids = torch.tensor([], dtype=torch.int) 
+        self.cls_ids = torch.tensor([self.prefix_ids[0]])
+        self.eos_ids = torch.tensor([self.postfix_ids[-1]])
+
+        # add learnable token ids, example(prefix): 
+        # <cls> <learnable 0> Here is a piece of news with <mask> information . <learnable 1>
+        # ==> [cls_ids, learnable_ids, ... ... ..., learnable_ids]
+        self.prefix_ids = torch.cat([self.cls_ids, self.unused_ids, self.prefix_ids[1:], self.unused_ids], dim=0)
+        # self.prefix_ids = self.cls_ids
+        # self.postfix_ids = torch.cat([self.unused_ids, self.postfix_ids[:-1], self.unused_ids, self.eos_ids], dim=0)
+        # self.postfix_ids = torch.cat([self.unused_ids]*20, dim=0)
+        # self.postfix_ids = torch.cat([self.postfix_ids, self.eos_ids], dim=0)
+        # self.postfix_ids[20//2] = self.mask_ids
+        self.postfix_ids = self.eos_ids
+
         self.add_len = int(len(self.prefix_ids) + len(self.postfix_ids))
         self.add_attention_mask = torch.ones(self.add_len)
 
         self.max_len = 512 - self.add_len
-    
+        
     def _collate_fn(self, batch):
         ret = []
         batch.sort(key=self.sort_key, reverse=True)  

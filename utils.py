@@ -6,7 +6,7 @@ from configparser import ConfigParser, ExtendedInterpolation
 from numpy import random as np_random
 import torch
 from torch.utils.data import Dataset, random_split
-from sklearn.metrics import confusion_matrix
+from sklearn import metrics
 
 
 def set_seed(seed):
@@ -104,27 +104,34 @@ def train_val_split(train_dataset: Dataset, val_ratio: float, shuffle: bool = Tr
 
 
 def compute_measures(logit, y_gt):
-    predicts = torch.max(logit, 1)[1]
+    predicts = torch.max(logit, 1)[1].cpu().numpy()
+    y_gt = y_gt.cpu().numpy()
 
-    tmp = confusion_matrix(y_true=y_gt.cpu().numpy(), y_pred=predicts.cpu().numpy(), labels=[0, 1]).ravel()
-    tn, fp, fn, tp = [float(x) for x in tmp]
+    accuracy = metrics.accuracy_score(y_true=y_gt, y_pred=predicts)
 
-    if tp + fp == 0:
-        precision = 0
-    else:
-        precision = tp / (tp + fp)
-    
-    if tp + fn == 0:
-        recall = 0
-    else:
-        recall = tp / (tp + fn)
-    
-    accuracy = (tp + tn) / (tp + fp + tn + fn)
+    # binary: set 1(fake news) as positive sample
+    bi_precision = metrics.precision_score(y_true=y_gt, y_pred=predicts, average='binary', zero_division=0)
+    bi_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='binary', zero_division=0)
+    bi_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='binary', zero_division=0)
 
-    if precision + recall  == 0:
-        f1 = 0
-    else:
-        f1 = 2*precision*recall/(precision+recall)
+    # micro
+    micro_precision = metrics.precision_score(y_true=y_gt, y_pred=predicts, average='micro', zero_division=0)
+    micro_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='micro', zero_division=0)
+    micro_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='micro', zero_division=0)
 
-    measures = {"precision":precision, "accuracy":accuracy, "recall":recall, "f1":f1}
+    # macro
+    macro_precision = metrics.precision_score(y_true=y_gt, y_pred=predicts, average='macro', zero_division=0)
+    macro_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='macro', zero_division=0)
+    macro_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='macro', zero_division=0)
+
+    # weighted macro
+    weighted_precision = metrics.precision_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
+    weighted_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
+    weighted_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
+
+    measures = {"accuracy":accuracy, 
+                "bi_precision": bi_precision, "bi_recall": bi_recall, "bi_f1": bi_f1, 
+                "micro_precision": micro_precision, "micro_recall": micro_recall, "micro_f1": micro_f1, 
+                "macro_precision": macro_precision, "macro_recall": macro_recall, "macro_f1": macro_f1, 
+                "weighted_precision": weighted_precision, "weighted_recall": weighted_recall, "weighted_f1": weighted_f1}
     return measures

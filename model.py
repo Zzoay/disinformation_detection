@@ -46,25 +46,6 @@ class BertFineTune(nn.Module):
         return logits
 
 
-# class MaskedLanguageModel(nn.Module):
-#     """
-#     predicting origin token from masked input sequence
-#     n-class classification problem, n-class = vocab_size
-#     """
-
-#     def __init__(self, hidden_size, vocab_size):
-#         """
-#         :param hidden_size: output size of BERT model
-#         :param vocab_size: total vocab size
-#         """
-#         super().__init__()
-#         self.linear = nn.Linear(hidden_size, vocab_size)
-#         self.log_softmax = nn.LogSoftmax(dim=-1)
-
-#     def forward(self, x):
-#         return self.log_softmax(self.linear(x))
-
-
 class BertPromptTune(nn.Module):
     def __init__(self, config, bert_config, mask_token, positive_tokens, negative_tokens):
         super().__init__()
@@ -84,16 +65,39 @@ class BertPromptTune(nn.Module):
         self.positive_weights = nn.Parameter(torch.rand(len(positive_tokens)), requires_grad = True)
         self.negative_weights = nn.Parameter(torch.rand(len(negative_tokens)), requires_grad = True)
 
-        num_learnable_token = 4
-        # self.learnable_token_emb = nn.Embedding(num_embeddings=num_learnable_token, embedding_dim=300)
-        self.learnable_token = None 
+        self.position_weights = nn.Parameter(torch.rand(2), requires_grad = True)
+
+        self.learnable_tokens = - 1
+        self.num_learnable_token = 2
+        self.learnable_token_emb = nn.Embedding(num_embeddings=self.num_learnable_token, embedding_dim=300)
+        # self.learnable_token_lstm = nn.LSTM(input_size=300, hidden_size=768//2, batch_first=True, bidirectional=True, dropout=0.33)
+        self.learnable_token_ffn = nn.Linear(in_features=300, out_features=768)
+        # self.learnable_token_emb = None 
     
     def forward(self, input_ids, attention_mask):
         batch_size, seq_len = input_ids.size()
         mask_ids = (input_ids == self.mask_token).nonzero(as_tuple=True)
         # mask_ids = mask_ids.expand(batch_size, seq_len, self.vocab_size)
-        # bert
-        roberta_outputs = self.roberta(input_ids, attention_mask)  # type: ignore
+
+        if self.learnable_token_emb is not None:
+            add_ids = (input_ids == self.learnable_tokens).nonzero(as_tuple=True)
+            input_ids[add_ids] = self.mask_token
+            
+            # add learnable token embeddings
+            replace_embeds  = self.learnable_token_emb(torch.arange(self.num_learnable_token).cuda())  # num_learnable_token, embed_dim
+            replace_embeds = replace_embeds.unsqueeze(0).repeat(batch_size, 1, 1)  # batch_size, num_learnable_token, embed_dim
+            replace_embeds  = self.learnable_token_ffn(replace_embeds)  # batch_size, num_learnable_token, hidden_size
+            replace_embeds = replace_embeds.reshape(batch_size*self.num_learnable_token, -1)  # batch_size * num_learnable_token, hidden_size
+            
+            # replace the corresponding token embeddings
+            input_emb = self.roberta.embeddings.word_embeddings(input_ids)  # type: ignore
+            input_emb[add_ids] = replace_embeds
+            input_emb = input_emb.view(batch_size, seq_len, -1)  # batch_size, seq_len, embed_dim
+            # roberta
+            roberta_outputs = self.roberta(inputs_embeds=input_emb, attention_mask=attention_mask)  # type: ignore
+        else:
+            # roberta
+            roberta_outputs = self.roberta(input_ids, attention_mask)  # type: ignore
         sequence_output = roberta_outputs.last_hidden_state
 
         logits = self.masklm(sequence_output)
@@ -102,24 +106,24 @@ class BertPromptTune(nn.Module):
         mask_logits = logits[mask_ids]  # batch_size, vocab_size
         mask_logits = F.log_softmax(mask_logits, dim=1) 
         mask_logits = mask_logits.view(batch_size, -1, vocab_size) # batch_size, mask_num, vocab_size
+        _, mask_num, _ = mask_logits.size()
 
-        # mask_logits = mask_logits.sum(dim=1).squeeze(1)  # batch_size, vocab_size
-        mask_logits = mask_logits.prod(dim=1).squeeze(1)  # batch_size, vocab_size
+        # batch_size, mask_num, vocab_size
+        mask_logits = (mask_logits.transpose(1, 2) * self.position_weights[:mask_num]).transpose(1, 2)
+
+        mask_logits = mask_logits.sum(dim=1).squeeze(1)  # batch_size, vocab_size
+        # mask_logits = mask_logits.prod(dim=1).squeeze(1)  # batch_size, vocab_size
 
         positive_weight = F.softmax(self.positive_weights, dim=0)
         negative_weight = F.softmax(self.negative_weights, dim=0)
 
-        positive_logits = mask_logits[:, self.positive_tokens]  # batch_size, len(positive_tokens)
-        negative_logits = mask_logits[:, self.negative_tokens]  # batch_size, len(negative_tokens)
-
-        positive_logits = positive_logits * positive_weight  # batch_size, len(positive_tokens)
-        negative_logits = negative_logits * negative_weight  # batch_size, len(positive_tokens)
+        positive_logits = mask_logits[:, self.positive_tokens] * positive_weight  # batch_size, len(positive_tokens)
+        negative_logits = mask_logits[:, self.negative_tokens] * negative_weight # batch_size, len(negative_tokens)
 
         positive_logits = positive_logits.sum(1).unsqueeze(1)  # batch_size, 1
         negative_logits = negative_logits.sum(1).unsqueeze(1)  # batch_size, 1
 
         cls_logits = torch.cat([positive_logits, negative_logits], dim=1)
-        cls_logits = F.softmax(cls_logits, dim=1)
 
         return cls_logits
 
@@ -148,7 +152,6 @@ class RobertaLMHead(nn.Module):
     def _tie_weights(self):
         # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
         self.bias = self.decoder.bias
-
 
 
 class TextCNN(nn.Module):

@@ -31,13 +31,13 @@ class FinetuneFoward():
         weight[0] = 1 - cnt[0] / sum(cnt.values())  # type: ignore
         weight[1] = 1 - cnt[1] / sum(cnt.values())  # type: ignore
         loss = self.loss_fn(input=logits, target=labels, weight=torch.tensor(weight).cuda())
+        # loss = self.loss_fn(input=logits, target=labels)
         metrics = self.metrics_fn(logits, labels)
 
         return logits, loss, metrics
     
     def __call__(self, *args: Any, **kwds: Any) -> Any:
         return self.compute_forward(*args, **kwds)
-
 
 
 class TextCNNFoward():
