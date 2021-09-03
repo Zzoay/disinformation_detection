@@ -61,7 +61,7 @@ def load_config(config_file: str) -> dict:
 
 
 def compute_acc(logit, y_gt):
-    predicts = torch.max(logit, 1)[1]
+    predicts = torch.max(logit, 1)
     corrects = (predicts.view(y_gt.size()).data == y_gt.data).float().sum()
     accuracy = 100.0 * float(corrects/len(y_gt))
 
@@ -129,9 +129,22 @@ def compute_measures(logit, y_gt):
     weighted_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
     weighted_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
 
-    measures = {"accuracy":accuracy, 
+    measumetrics = {"accuracy":accuracy,
                 "bi_precision": bi_precision, "bi_recall": bi_recall, "bi_f1": bi_f1, 
                 "micro_precision": micro_precision, "micro_recall": micro_recall, "micro_f1": micro_f1, 
                 "macro_precision": macro_precision, "macro_recall": macro_recall, "macro_f1": macro_f1, 
                 "weighted_precision": weighted_precision, "weighted_recall": weighted_recall, "weighted_f1": weighted_f1}
-    return measures
+    return measumetrics
+
+
+def print_measures(loss, metrics):
+    print("-Loss: {:.4f}  Accuracy: {:4f}  Balanced Accuracy: {:4f}\n" \
+            " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+            " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+            " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+            " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" 
+        .format(loss, metrics['accuracy'],                          # type: ignore
+                metrics['bi_precision'], metrics['bi_recall'], metrics['bi_f1'],  # type: ignore
+                metrics['micro_precision'], metrics['micro_recall'], metrics['micro_f1'],  # type: ignore
+                metrics['macro_precision'], metrics['macro_recall'], metrics['macro_f1'],  # type: ignore
+                metrics['weighted_precision'], metrics['weighted_recall'], metrics['weighted_f1']))  # type: ignore    
