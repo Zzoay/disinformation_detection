@@ -1,3 +1,10 @@
 __pycache__
 .mypy_cache
+.vscode
 ckpt/
+kan/data/
+data/
+processed_data/
+result.csv
+answer_weights.csv
+important_res.csv
