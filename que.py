@@ -4,8 +4,7 @@ import os
 import sys
 import time
  
-cmd = 'python run.py'
- 
+cmd = 'python run_few_shot.py'
  
 def gpu_info():
     gpu_status = os.popen('nvidia-smi | grep %').read().split('|')

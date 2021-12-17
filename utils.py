@@ -129,22 +129,48 @@ def compute_measures(logit, y_gt):
     weighted_recall = metrics.recall_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
     weighted_f1 = metrics.f1_score(y_true=y_gt, y_pred=predicts, average='weighted', zero_division=0)
 
-    measumetrics = {"accuracy":accuracy,
+    # auc
+    auc = metrics.roc_auc_score(y_true=y_gt, y_score=logit[:, 1].cpu().detach().numpy())
+
+    measures = {"accuracy":accuracy,
                 "bi_precision": bi_precision, "bi_recall": bi_recall, "bi_f1": bi_f1, 
                 "micro_precision": micro_precision, "micro_recall": micro_recall, "micro_f1": micro_f1, 
                 "macro_precision": macro_precision, "macro_recall": macro_recall, "macro_f1": macro_f1, 
-                "weighted_precision": weighted_precision, "weighted_recall": weighted_recall, "weighted_f1": weighted_f1}
-    return measumetrics
+                "weighted_precision": weighted_precision, "weighted_recall": weighted_recall, "weighted_f1": weighted_f1,
+                "auc": auc}
+    return measures
 
 
 def print_measures(loss, metrics):
-    print("-Loss: {:.4f}  Accuracy: {:4f}  Balanced Accuracy: {:4f}\n" \
+    print("-Loss: {:.4f}  Accuracy: {:4f} \n" \
             " Binary:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
             " Micro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
             " Macro:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
-            " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" 
+            " Weighted:  Precision: {:4f}  Recall: {:4f}  F1: {:4f}  \n" \
+            " AUC: {:4f}"
         .format(loss, metrics['accuracy'],                          # type: ignore
                 metrics['bi_precision'], metrics['bi_recall'], metrics['bi_f1'],  # type: ignore
                 metrics['micro_precision'], metrics['micro_recall'], metrics['micro_f1'],  # type: ignore
                 metrics['macro_precision'], metrics['macro_recall'], metrics['macro_f1'],  # type: ignore
-                metrics['weighted_precision'], metrics['weighted_recall'], metrics['weighted_f1']))  # type: ignore    
+                metrics['weighted_precision'], metrics['weighted_recall'], metrics['weighted_f1'],  # type: ignore
+                metrics['auc']))  # type: ignore    
+
+
+def get_label_blance(data, ids, shot):
+    # to make sure label blanced and entity not-null
+    train_ids_pool, val_ids_pool = [], []  # type: ignore
+    for i, idx in enumerate(ids): 
+        if len(data[idx][1]) == 0:  # entities is null
+            continue 
+        if len(train_ids_pool) < shot:
+            if len(train_ids_pool) == 0 or data[train_ids_pool[-1]][2] != data[idx][2]:
+                train_ids_pool.append(idx)
+            else:
+                continue
+        elif len(val_ids_pool) < shot:
+            if len(val_ids_pool) == 0 or data[val_ids_pool[-1]][2] != data[idx][2]:
+                val_ids_pool.append(idx)
+            else:
+                continue
+    
+    return train_ids_pool, val_ids_pool
