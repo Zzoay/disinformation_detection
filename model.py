@@ -199,8 +199,6 @@ class BertPTWithEntity(nn.Module):
         super().__init__()
         # encoder
         self.roberta = RobertaModel.from_pretrained('roberta-base')
-        # self.roberta = BertModel.from_pretrained('bert-base-uncased')
-
         self.masklm = RobertaLMHead(bert_config)
 
         if not fine_tune_all:  # freeze the pretrained encoder
@@ -242,99 +240,29 @@ class BertPTWithEntity(nn.Module):
         self.learnable_tokens = - 1
         self.num_learnable_token = num_learnable_token
         # self.num_learnable_token = 4
+        hidden_size = config['hidden_size']
+        dropout = config['dropout']
         if with_learnable_emb:
             self.learnable_token_emb = nn.Embedding(
-                num_embeddings=self.num_learnable_token, embedding_dim=768)
+                num_embeddings=self.num_learnable_token, embedding_dim=hidden_size)
         else:
             self.learnable_token_emb = None
         # self.learnable_token_ffn = nn.Linear(in_features=300, out_features=768)
 
         # self.entity_project = nn.Linear(in_features=768, out_features=300)
-        self.entity_conv1 = nn.Conv2d(1, 768, (3, 768))
+        self.entity_conv1 = nn.Conv2d(1, hidden_size, (3, hidden_size))
         # self.entity_conv2 = nn.Conv2d(1, 300, (5, 300))
         # self.entity_conv3 = nn.Conv2d(1, 768, (3, 300))
 
         self.entity_gru = nn.GRU(
-            input_size=768, hidden_size=768//2, bidirectional=True, batch_first=True)
+            input_size=hidden_size, hidden_size=hidden_size//2, bidirectional=True, batch_first=True, dropout=dropout)
 
-        self.norm = nn.LayerNorm(normalized_shape=768)
-        self.dropout = nn.Dropout(0.33)
-
-    def encode_entities(self, input_ids, entity_ids):
-        batch_size, seq_len = input_ids.size()
-
-        add_ids = (input_ids == self.learnable_tokens).nonzero(
-            as_tuple=True)
-        input_ids[add_ids] = self.mask_token_id
-
-        # # add learnable token embeddings
-        replace_embeds = self.learnable_token_emb(torch.arange(
-            self.num_learnable_token).cuda())  # num_learnable_token, embed_dim
-
-        replace_embeds = replace_embeds.unsqueeze(0).repeat(
-            batch_size, 1, 1)  # batch_size, num_learnable_token, embed_dim
-
-        # learn learnable token with entity
-        entity_lens = (entity_ids != 1).sum(1) - 2  # ignore cls, eos, pad
-        entity_emb = self.roberta.embeddings.word_embeddings(
-            entity_ids)  # type: ignore
-
-        entity_reprs = self.entity_conv1(
-            entity_emb.unsqueeze(1)).squeeze(-1).transpose(1, 2)
-
-        # _, e_len, _ = entity_reprs.size()  # e_len is the conved entity seq's max length
-        # len_scale = (entity_lens * (e_len / entity_lens.max())).long()
-
-        # entity_reprs[:, 0, :] += replace_embeds[:, 0]
-        # entity_reprs[torch.arange(batch_size),
-        #             len_scale-1, :] += replace_embeds[:, 1]
-        entity_reprs = self.dropout(self.norm(entity_reprs))
-        entity_reprs, _ = self.entity_gru(entity_reprs)
-        entity_reprs = entity_reprs.transpose(1, 2)
-
-        _, _, e_len = entity_reprs.size()  # e_len is the encoded entity seq's max length
-        len_scale = (entity_lens * (e_len / entity_lens.max())).long()
-
-        eo1, eo2 = replace_embeds[:, 0], replace_embeds[:, 1]
-        e1, e2 = entity_reprs[:, :, 0], entity_reprs[torch.arange(
-            batch_size), :, len_scale-1]
-
-        e1, e2 = e1 + eo1, e2 + eo2
-
-        replace_embeds = torch.cat(
-            [e1.unsqueeze(1), e2.unsqueeze(1)], dim=1)
-        replace_embeds = self.dropout(self.norm(replace_embeds))
-
-        # replace the corresponding token embeddings
-        input_emb = self.roberta.embeddings.word_embeddings(
-            input_ids)  # type: ignore
-        input_emb[add_ids] = replace_embeds.view(-1, 768)
-        # batch_size, seq_len, embed_dim
-        input_emb = input_emb.view(batch_size, seq_len, -1)
-                    
-        return input_emb
-    
-    def encode_entiies_zero(self, input_ids, entity_ids):
-        batch_size, seq_len = input_ids.size()
-        add_ids = (input_ids == self.learnable_tokens).nonzero(
-            as_tuple=True)
-        input_ids[add_ids] = self.mask_token_id
-
-        replace_embeds = self.roberta.embeddings.word_embeddings(
-            entity_ids).sum(1).repeat(2, 1)
-
-        # replace the corresponding token embeddings
-        input_emb = self.roberta.embeddings.word_embeddings(
-            input_ids)  # type: ignore
-        input_emb[add_ids] = replace_embeds.view(-1, 768)
-        # batch_size, seq_len, embed_dim
-        input_emb = input_emb.view(batch_size, seq_len, -1)   
-        return input_emb
+        self.norm = nn.LayerNorm(normalized_shape=hidden_size)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, input_ids, attention_mask, entity_ids):
         batch_size, seq_len = input_ids.size()
         mask_ids = (input_ids == self.mask_token_id).nonzero(as_tuple=True)
-        # mask_ids = mask_ids.expand(batch_size, seq_len, self.vocab_size)
 
         if self.learnable_token_emb is None:
             # roberta
@@ -363,9 +291,10 @@ class BertPTWithEntity(nn.Module):
         else:  # if self.learnable_token_emb is not None
             input_emb = self.encode_entities(input_ids, entity_ids)
             # input_emb = self.encode_entiies_zero(input_ids, entity_ids)
-            # roberta
+
             roberta_outputs = self.roberta(
                 inputs_embeds=input_emb, attention_mask=attention_mask)  # type: ignore
+
         sequence_output = roberta_outputs.last_hidden_state
 
         logits = self.masklm(sequence_output)
@@ -402,180 +331,75 @@ class BertPTWithEntity(nn.Module):
 
         return cls_logits
 
-
-class PTWELightWeight(nn.Module):   # only tune the prompt
-    def __init__(self,
-                 config,
-                 bert_config,
-                 mask_token_id,
-                 positive_token_ids,
-                 negative_token_ids,
-                 with_learnable_emb=True,
-                 with_answer_weights=True,
-                 with_position_weights=False,
-                 num_learnable_token=2,
-                 zero_shot=False):
-        super().__init__()
-        # encoder
-        self.roberta = RobertaModel.from_pretrained('roberta-base')
-        # self.roberta = BertModel.from_pretrained('bert-base-uncased')
-        # for param in self.roberta.base_model.parameters(): # type: ignore
-        #     param.requires_grad = False
-        # self.roberta.embeddings.word_embeddings.requires_grad = True
-
-        self.masklm = RobertaLMHead(bert_config)
-
-        self.vocab_size = bert_config.vocab_size
-        self.mask_token_id = mask_token_id
-
-        self.positive_token_ids = positive_token_ids
-        self.negative_token_ids = negative_token_ids
-
-        # when in zero shot condition, simply sum over all ids
-        if zero_shot:
-            with_learnable_emb = False
-            with_answer_weights = False
-
-        if with_answer_weights:
-            # assume weights follow a uniform distribution
-            self.positive_weights = nn.Parameter(torch.rand(
-                len(positive_token_ids)), requires_grad=True)
-            self.negative_weights = nn.Parameter(torch.rand(
-                len(negative_token_ids)), requires_grad=True)
-        else:
-            self.positive_weights = nn.Parameter(torch.ones(
-                len(positive_token_ids)), requires_grad=False)
-            self.negative_weights = nn.Parameter(torch.ones(
-                len(negative_token_ids)), requires_grad=False)
-
-        if with_position_weights:
-            self.position_weights = nn.Parameter(
-                torch.rand(2), requires_grad=True)
-        else:
-            self.position_weights = nn.Parameter(
-                torch.ones(2), requires_grad=False)
-
-        self.learnable_tokens = - 1
-        self.num_learnable_token = num_learnable_token
-        # self.num_learnable_token = 4
-        if with_learnable_emb:
-            self.learnable_token_emb = nn.Embedding(
-                num_embeddings=self.num_learnable_token, embedding_dim=768)
-        else:
-            self.learnable_token_emb = None
-        # self.learnable_token_ffn = nn.Linear(in_features=300, out_features=768)
-
-        # self.entity_project = nn.Linear(in_features=768, out_features=300)
-        self.entity_conv1 = nn.Conv2d(1, 768, (3, 768))
-        # self.entity_conv2 = nn.Conv2d(1, 300, (5, 300))
-        # self.entity_conv3 = nn.Conv2d(1, 768, (3, 300))
-
-        self.entity_gru = nn.GRU(
-            input_size=768, hidden_size=768//2, bidirectional=True, batch_first=True)
-
-        self.norm = nn.LayerNorm(normalized_shape=768)
-        self.dropout = nn.Dropout(0.33)
-
-    def forward(self, input_ids, attention_mask, entity_ids):
-        prefix_ids, input_ids = input_ids
-
+    def encode_entities(self, input_ids, entity_ids):
         batch_size, seq_len = input_ids.size()
-        mask_ids = (input_ids == self.mask_token_id).nonzero(as_tuple=True)
-        # mask_ids = mask_ids.expand(batch_size, seq_len, self.vocab_size)
 
-        if self.learnable_token_emb is not None:
-            add_ids = (prefix_ids == self.learnable_tokens).nonzero(
-                as_tuple=True)
-            prefix_ids[add_ids] = self.mask_token_id
+        add_ids = (input_ids == self.learnable_tokens).nonzero(
+            as_tuple=True)
+        input_ids[add_ids] = self.mask_token_id
 
-            # # add learnable token embeddings
-            replace_embeds = self.learnable_token_emb(torch.arange(
-                self.num_learnable_token).cuda())  # num_learnable_token, embed_dim
-            # # replace_embeds = self.dropout(replace_embeds)
-            replace_embeds = replace_embeds.unsqueeze(0).repeat(
-                batch_size, 1, 1)  # batch_size, num_learnable_token, embed_dim
+        # # add learnable token embeddings
+        replace_embeds = self.learnable_token_emb(torch.arange(
+            self.num_learnable_token).cuda())  # num_learnable_token, embed_dim
 
-            # learn learnable token with entity
-            entity_lens = (entity_ids != 1).sum(1) - 2  # ignore cls, eos, pad
-            entity_emb = self.roberta.embeddings.word_embeddings(
-                entity_ids)  # type: ignore
+        replace_embeds = replace_embeds.unsqueeze(0).repeat(
+            batch_size, 1, 1)  # batch_size, num_learnable_token, embed_dim
 
-            # entity_reprs = self.dropout(self.entity_conv1(entity_emb.unsqueeze(1)).squeeze(-1).transpose(1, 2))
-            entity_reprs = self.entity_conv1(
-                entity_emb.unsqueeze(1)).squeeze(-1).transpose(1, 2)
+        # learn learnable token with entity
+        entity_lens = (entity_ids != 1).sum(1) - 2  # ignore cls, eos, pad
+        entity_emb = self.roberta.embeddings.word_embeddings(
+            entity_ids)  # type: ignore
 
-            _, e_len, _ = entity_reprs.size()  # e_len is the conved entity seq's max length
-            len_scale = (entity_lens * (e_len / entity_lens.max())).long()
+        entity_reprs = self.entity_conv1(
+            entity_emb.unsqueeze(1)).squeeze(-1).transpose(1, 2)
 
-            entity_reprs[:, 0, :] += replace_embeds[:, 0]
-            entity_reprs[torch.arange(batch_size),
-                         len_scale-1, :] += replace_embeds[:, 1]
-            entity_reprs = self.dropout(self.norm(entity_reprs))
+        # _, e_len, _ = entity_reprs.size()  # e_len is the conved entity seq's max length
+        # len_scale = (entity_lens * (e_len / entity_lens.max())).long()
 
-            # entity_reprs = self.dropout(self.entity_conv2(entity_reprs).squeeze(-1).transpose(1, 2))
-            entity_reprs, _ = self.entity_gru(entity_reprs)
-            entity_reprs = entity_reprs.transpose(1, 2)
+        # entity_reprs[:, 0, :] += replace_embeds[:, 0]
+        # entity_reprs[torch.arange(batch_size),
+        #             len_scale-1, :] += replace_embeds[:, 1]
+        entity_reprs = self.norm(entity_reprs)
+        entity_reprs, _ = self.entity_gru(entity_reprs)
+        entity_reprs = entity_reprs.transpose(1, 2)
 
-            _, _, e_len = entity_reprs.size()  # e_len is the encoded entity seq's max length
-            len_scale = (entity_lens * (e_len / entity_lens.max())).long()
+        _, _, e_len = entity_reprs.size()  # e_len is the encoded entity seq's max length
+        len_scale = (entity_lens * (e_len / entity_lens.max())).long()
 
-            # len_middle = (len_scale // 2).long()
-            eo1, eo2 = replace_embeds[:, 0], replace_embeds[:, 1]
-            e1, e2 = entity_reprs[:, :, 0], entity_reprs[torch.arange(
-                batch_size), :, len_scale-1]
+        eo1, eo2 = replace_embeds[:, 0], replace_embeds[:, 1]
+        e1, e2 = entity_reprs[:, :, 0], entity_reprs[torch.arange(
+            batch_size), :, len_scale-1]
 
-            e1, e2 = e1 + eo1, e2 + eo2
+        e1, e2 = e1 + eo1, e2 + eo2
 
-            replace_embeds = torch.cat(
-                [e1.unsqueeze(1), e2.unsqueeze(1)], dim=1)
-            replace_embeds = self.dropout(self.norm(replace_embeds))
+        replace_embeds = torch.cat(
+            [e1.unsqueeze(1), e2.unsqueeze(1)], dim=1)
+        replace_embeds = self.norm(replace_embeds)
 
-            prefix_outputs = self.roberta(
-                prefix_ids, attention_mask=torch.ones_like(prefix_ids)).last_hidden_state
+        # replace the corresponding token embeddings
+        input_emb = self.roberta.embeddings.word_embeddings(
+            input_ids)  # type: ignore
+        input_emb[add_ids] = replace_embeds.view(-1, 768)
+        # batch_size, seq_len, embed_dim
+        input_emb = input_emb.view(batch_size, seq_len, -1)           
+        return input_emb
+    
+    def encode_entiies_zero(self, input_ids, entity_ids):
+        batch_size, seq_len = input_ids.size()
+        add_ids = (input_ids == self.learnable_tokens).nonzero(
+            as_tuple=True)
+        input_ids[add_ids] = self.mask_token_id
 
-            with torch.no_grad():
-                x_outputs = self.roberta(
-                    input_ids, attention_mask=attention_mask).last_hidden_state
-        else:
-            # roberta
-            roberta_outputs = self.roberta(
-                input_ids, attention_mask)  # type: ignore
+        replace_embeds = self.roberta.embeddings.word_embeddings(
+            entity_ids).sum(1).repeat(2, 1)
 
-        sequence_output = torch.cat([prefix_outputs, x_outputs], dim=1)
-
-        logits = self.masklm(sequence_output)
-        _, _, vocab_size = logits.size()
-
-        mask_logits = logits[mask_ids]  # batch_size, vocab_size
-        mask_logits = F.log_softmax(mask_logits, dim=1)
-        # batch_size, mask_num, vocab_size
-        mask_logits = mask_logits.view(batch_size, -1, vocab_size)
-        _, mask_num, _ = mask_logits.size()
-
-        # batch_size, mask_num, vocab_size
-        mask_logits = (mask_logits.transpose(1, 2) *
-                       self.position_weights[:mask_num]).transpose(1, 2)
-
-        mask_logits = mask_logits.sum(dim=1).squeeze(
-            1)  # batch_size, vocab_size
-        # mask_logits = mask_logits.prod(dim=1).squeeze(1)  # batch_size, vocab_size
-
-        positive_weight = F.softmax(self.positive_weights, dim=0)
-        negative_weight = F.softmax(self.negative_weights, dim=0)
-
-        # batch_size, len(positive_token_ids)
-        positive_logits = mask_logits[:,
-                                      self.positive_token_ids] * positive_weight
-        # batch_size, len(negative_token_ids)
-        negative_logits = mask_logits[:,
-                                      self.negative_token_ids] * negative_weight
-
-        positive_logits = positive_logits.sum(1).unsqueeze(1)  # batch_size, 1
-        negative_logits = negative_logits.sum(1).unsqueeze(1)  # batch_size, 1
-
-        cls_logits = torch.cat([positive_logits, negative_logits], dim=1)
-
-        return cls_logits
+        # replace the corresponding token embeddings
+        input_emb = self.roberta.embeddings.word_embeddings(
+            input_ids)  # type: ignore
+        input_emb[add_ids] = replace_embeds.view(-1, 768)
+        # batch_size, seq_len, embed_dim
+        input_emb = input_emb.view(batch_size, seq_len, -1)   
+        return input_emb
 
 
 class RobertaLMHead(nn.Module):
