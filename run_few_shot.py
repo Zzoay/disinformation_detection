@@ -37,7 +37,7 @@ if __name__ == "__main__":
             using_prefix = True
             using_postfix = False
             num_learnable_token = 2
-        for shot in [16, 8, 4, 2]:
+        for shot in [16]:
             if shot in [100, 64, 50, 32]:
                 config = load_config("config/few_shot.ini")
             elif shot in [16, 10, 8, 5, 4, 2, 1]:
@@ -50,7 +50,6 @@ if __name__ == "__main__":
             trainer_config = config["trainer"]
 
             bert_config = RobertaConfig()
-            # bert_config = BertConfig().from_pretrained("bert-large-uncased")
 
             for dataset in ["politifact"]:
 
@@ -68,7 +67,6 @@ if __name__ == "__main__":
                     prompt_words = positive_words + negative_words
 
                     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-                    # tokenizer = BertTokenizer.from_pretrained('bert-large-uncased')
                     mask_token = tokenizer(tokenizer.mask_token)['input_ids'][1]  # type: ignore
                     if mode == "fine-tune":
                         tokenized_collator = TokenizedCollator(tokenizer, 
@@ -77,14 +75,6 @@ if __name__ == "__main__":
                                                                 label_idx=2, 
                                                                 sort_key=lambda x:x[3])
                     elif mode == "prompt-tune":
-                        # tokenized_collator = TokenizedWithPromptCollator(tokenizer,   # type: ignore
-                        #                                                 token_idx=0, 
-                        #                                                 label_idx=1, 
-                        #                                                 sort_key=lambda x:x[2], 
-                        #                                                 only_mask = False,
-                        #                                                 using_prefix = using_prefix,
-                        #                                                 using_postfix = using_postfix,
-                        #                                                 use_learnable_token = True)  # type: ignore
                         tokenized_collator = PromptTokenzierWithEntityCollator(tokenizer, 
                                                                                 token_idx=0, 
                                                                                 entity_idx=1,
@@ -118,20 +108,6 @@ if __name__ == "__main__":
                         ids = [i for i in range(len(data))]  # type: ignore
                         random.shuffle(ids)
 
-                        # train_ids_pool, val_ids_pool = [], []  # type: ignore
-                        # for i, idx in enumerate(ids): 
-                        #     if len(data[idx][1]) == 0:  # entities is null
-                        #         continue 
-                        #     if len(train_ids_pool) < shot:
-                        #         if len(train_ids_pool) == 0 or data[train_ids_pool[-1]][2] != data[idx][2]:
-                        #             train_ids_pool.append(idx)
-                        #         else:
-                        #             continue
-                        #     elif len(val_ids_pool) < shot:
-                        #         if len(val_ids_pool) == 0 or data[val_ids_pool[-1]][2] != data[idx][2]:
-                        #             val_ids_pool.append(idx)
-                        #         else:
-                        #             continue
                         train_ids_pool, val_ids_pool = get_label_blance(data, ids, shot)
                         
                         train_ids = train_ids_pool

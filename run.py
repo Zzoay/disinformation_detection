@@ -164,7 +164,7 @@ if __name__ == "__main__":
                                                  model=model,
                                                  trainset_size=len(train_ids),
                                                  batch_size=data_config['batch_size'],
-                                                 weight_balance=(dataset == 'gossipcop'))
+                                                 class_balance=(dataset == 'gossipcop'))
             # torch.save(best_model, f"ckpt/{dataset}-{mode}-fold{fold}.pt")  # type: ignore
             model.load_state_dict(best_model)  # type: ignore
             test_loss, test_metrics = trainer.evaluate(
@@ -174,15 +174,15 @@ if __name__ == "__main__":
             print("-Test: ")
             print_measures(test_loss, test_metrics)
             
-            if mode in ['prompt-tune', 'pt-with-entity']:
-                positive_weights = model.positive_weights.data.cpu()  # type: ignore
-                negative_weights = model.negative_weights.data.cpu()  # type: ignore
-                answer_weights = torch.cat(
-                    [positive_weights, negative_weights], dim=0).numpy()  # type: ignore
-                # output answer words weight
-                with open("answer_weights.csv", "a+") as f:
-                    save_weights = ",".join([str(x) for x in answer_weights])
-                    f.write(f"# roberta,full,{dataset},{save_weights}" + "\n")
+            # if mode in ['prompt-tune', 'pt-with-entity']:
+            #     positive_weights = model.positive_weights.data.cpu()  # type: ignore
+            #     negative_weights = model.negative_weights.data.cpu()  # type: ignore
+            #     answer_weights = torch.cat(
+            #         [positive_weights, negative_weights], dim=0).numpy()  # type: ignore
+            #     # output answer words weight
+            #     with open("answer_weights.csv", "a+") as f:
+            #         save_weights = ",".join([str(x) for x in answer_weights])
+            #         f.write(f"# roberta,full,{dataset},{save_weights}" + "\n")
 
             # save results of each fold
             with open("result.csv", "a+") as f:
@@ -202,7 +202,7 @@ if __name__ == "__main__":
         print("==========================================")
         print("-K-Fold AVG: ")
         print_measures(avg_loss, avg_metrics)
-        with open("result.csv", 'a+') as f:
+        with open("merge_res.csv", 'a+') as f:
             save_str = ",".join([str(x) for x in avg_metrics.values()])
             f.write(
                 f"{shot},roberta-{mode},{dataset},{avg_loss}," + save_str + "\n")

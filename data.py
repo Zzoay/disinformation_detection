@@ -137,6 +137,13 @@ def read_text_with_entity(data_file):
 
 
 def data_file_gen(data_path, corpus=None):
+    """
+    -gossipcop
+    -politifact
+        -fake
+        -real
+            -xxx.txt
+    """
     if corpus is not None:
         for label in os.listdir(f'{data_path}/'):
             for i, file_name in enumerate(os.listdir(f'{data_path}/{label}')):
@@ -445,123 +452,6 @@ class PromptTokenzierWithEntityCollator():
         return self._collate_fn(batch)
 
 
-class PTWELightWeightCollator():
-    def __init__(self, tokenizer, token_idx, entity_idx, label_idx, sort_key, only_mask=False, use_learnable_token=True, using_prefix=True, using_postfix=False):
-        self.token_idx = token_idx  # the index of data should be tokenized
-        self.label_idx = label_idx  # the index of label 
-        self.entity_idx = entity_idx
-
-        self.sort_key = sort_key  # sort key
-
-        self.tokenizer = tokenizer
-        self.mask_ids = tokenizer.mask_token_id
-
-        self.only_mask = only_mask
-        self.use_learnable_token = use_learnable_token
-
-        if self.only_mask:
-            self.prefix_prompt = "<mask>"
-        else:
-            self.prefix_prompt = "Here is a piece of news with <mask> information . "
-            # self.prefix_prompt = "Here is a piece of news with [MASK] information . "
-        self.postfix_prompt = " This article is <mask> news ."
-        self.prefix_ids = self.tokenizer(self.prefix_prompt, padding=False, return_tensors="pt")['input_ids']
-        self.prefix_ids = self.prefix_ids[0][:-1]  # ignore <\s>
-        self.postfix_ids = self.tokenizer(self.postfix_prompt, padding=False, return_tensors="pt")['input_ids']
-        self.postfix_ids = self.postfix_ids[0][1:]  # ignore <cls>
-
-        # the last id is <mask>, we use the last but one token as unused token
-        if self.use_learnable_token:
-            self.unused_ids = torch.tensor([-1])
-        else:
-            self.unused_ids = torch.tensor([], dtype=torch.int) 
-        self.cls_id = torch.tensor([self.prefix_ids[0]])
-        self.eos_id = torch.tensor([self.postfix_ids[-1]])
-
-        # add learnable token ids, example(prefix): 
-        # <cls> <learnable 0> Here is a piece of news with <mask> information . <learnable 1>
-        # ==> [cls_id, learnable_ids, prompt_ids ..., learnable_ids]
-        if using_prefix:
-            self.prefix_ids = torch.cat([self.cls_id, self.unused_ids, self.prefix_ids[1:], self.unused_ids, self.eos_id], dim=0)
-        else:
-            self.prefix_ids = self.cls_id
-        # all learnable
-        # self.prefix_ids = torch.cat([self.unused_ids]*10, dim=0)
-        # self.prefix_ids[10//2] = self.mask_ids 
-        # self.prefix_ids = torch.cat([self.cls_id, self.prefix_ids], dim=0)
-
-        if using_postfix:
-            self.postfix_ids = torch.cat([self.unused_ids, self.postfix_ids[:-1], self.unused_ids, self.eos_id], dim=0)
-        else:
-            self.postfix_ids = self.eos_id
-        # all learnable
-        # self.postfix_ids = torch.cat([self.unused_ids]*10, dim=0)
-        # self.postfix_ids[10//2] = self.mask_ids
-        # self.postfix_ids = torch.cat([self.postfix_ids, self.eos_id], dim=0)
-
-        self.add_len = int(len(self.postfix_ids))
-        self.add_attention_mask = torch.ones(self.add_len)
-
-        self.max_len = 512 - self.add_len
-        
-    def _collate_fn(self, batch):
-        ret = []
-        batch.sort(key=self.sort_key, reverse=True)  
-
-        for i, samples in enumerate(zip(*batch)):
-            if i == self.token_idx:
-                # max_len = max(len(sentence.split()) for sentence in samples)
-                input_ids_lst, attention_mask_lst = [], []
-                for sample in samples:
-                    inputs = self.tokenizer(sample,
-                                            padding=False,
-                                            truncation=False,
-                                            return_tensors="pt").values()
-                    if len(inputs) == 2:  # roberta
-                        input_ids, attention_mask = inputs
-                    elif len(inputs) == 3:  # bert
-                        input_ids, _, attention_mask = inputs
-                    else:
-                        raise RuntimeError
-                    input_ids = input_ids[0][0:-1]
-                    attention_mask = attention_mask[0][0:-1]
-                    if len(input_ids) > self.max_len:
-                        input_ids = input_ids[:self.max_len]    
-                        attention_mask = attention_mask[:self.max_len]                                    
-                    input_ids = torch.cat([input_ids, self.postfix_ids], dim=0)
-                    attention_mask = torch.cat([attention_mask, self.add_attention_mask], dim=0)
-                        
-                    input_ids_lst.append(input_ids)
-                    attention_mask_lst.append(attention_mask)
-                # input_ids = torch.tensor(input_ids_lst)
-                # attention_mask = torch.tensor(attention_mask_lst)
-
-                input_ids = rnn_utils.pad_sequence(input_ids_lst, batch_first=True)
-                attention_mask = rnn_utils.pad_sequence(attention_mask_lst, batch_first=True)
-                # max_len = input_ids.shape[1]
-                ret.append([input_ids, self.prefix_ids.unsqueeze(0).repeat(input_ids.shape[0], 1)] ) 
-                ret.append(attention_mask)
-            elif i == self.entity_idx:
-                inputs = self.tokenizer(samples,
-                                        padding=True,
-                                        truncation=True,
-                                        return_tensors="pt").values()
-                if len(inputs) == 2:  # roberta
-                    entity_ids, _ = inputs
-                elif len(inputs) == 3:  # bert
-                    entity_ids, _, _ = inputs
-                else:
-                    raise RuntimeError
-                ret.append(entity_ids)
-            else:
-                ret.append(torch.tensor(samples))
-        # input_ids, attention_mask, label_ids, seq_lens
-        return ret
-
-    def __call__(self, batch):
-        return self._collate_fn(batch)
-
-
 def count_len(data_path):
     lens = []
     cnt = {'real':0, 'fake':0}
@@ -578,6 +468,7 @@ def count_len(data_path):
     print(max(lens))
     print(min(lens))
     print(cnt)
+
 
 if __name__ == "__main__":
     data_dir = "/home/jgy/FakeNewsNet/code/fakenewsnet_dataset"

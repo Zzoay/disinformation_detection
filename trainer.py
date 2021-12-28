@@ -7,7 +7,6 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.nn.functional import cross_entropy
 
-from optim import ScheduledOptim
 from utils import to_cuda, compute_acc, compute_measures, print_measures
 from forward_calculator import FinetuneFoward, FinetuneFowardWithEntity
 
@@ -55,12 +54,7 @@ class Trainer():
         for epoch in range(self.config["epochs"]):
             for batch in train_iter:
                 logit, loss = self.foward_calculator(batch, model, cuda=self.config['cuda'], class_balance=class_balance)
-
-                # self.optim_schedule.zero_grad()
-                # loss.backward()
-                # nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, model.parameters()), max_norm=self.config['clip'])
-                # self.optim_schedule.step_and_update_lr()
-                
+  
                 loss.backward()
                 nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, model.parameters()), max_norm=self.config['clip'])
                 self.optim.step()
@@ -92,9 +86,9 @@ class Trainer():
                     print_measures(best_res[0], best_res[1])
                     model.train()
                 
-                if epoch > 10 and early_stop_cnt >= self.config['early_stop']:
-                    print("--early stopping, training finished.")
-                    return best_res, best_model
+                # if epoch > 10 and early_stop_cnt >= self.config['early_stop']:
+                #     print("--early stopping, training finished.")
+                #     return best_res, best_model
 
                 step += 1
             # print(label_cnt)
