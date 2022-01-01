@@ -35,10 +35,6 @@ class Trainer():
                           lr=self.config['lr'],
                           weight_decay=self.config['weight_decay']
                           )
-        warmup_step = int(0.1 * self.config["epochs"] * (trainset_size / batch_size))  
-        self.optim_schedule = ScheduledOptim(optimizer=self.optim, 
-                                             d_model=768,  
-                                             n_warmup_steps=warmup_step)    
 
         best_res = [0, {"accuracy": 0, 
                         "bi_precision": 0, "bi_recall": 0, "bi_f1": 0, 
